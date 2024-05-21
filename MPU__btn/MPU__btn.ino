@@ -66,7 +66,7 @@ void loop() {
     }
   }
   if (fallDetected) {
-    if (digitalRead(BTN_PIN) == LOW) {
+    if (digitalRead(BTN_PIN) == 1) {
       if (millis() - fallDetectedMillis > 3000) { // 버튼이 3초 동안 눌려있을 경우
         Serial.println("낙상감지 확인");
         fallDetected = false; // 확인 후 상태 초기화
