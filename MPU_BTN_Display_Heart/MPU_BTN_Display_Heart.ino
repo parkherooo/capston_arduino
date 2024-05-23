@@ -1,123 +1,113 @@
-#define BTN_PIN 2
 #include <Wire.h>
 #include <U8g2lib.h>
-#include <PulseSensorPlayground.h>
-const int MPU_addr = 0x68; // I2C address of the MPU-6050
+
+// MPU-6050 센서 I2C 주소
+const int MPU_addr = 0x68; 
 int16_t AcX, AcY, AcZ, Tmp, GyX, GyY, GyZ;
-const float accelThreshold = 1.5; // 낙상 감지를 위한 가속도 임계값 (g 단위)
-const float gyroThreshold = 250; // 낙상 감지를 위한 자이로 임계값 (degrees/sec)
+const float accelThreshold = 1.5; // 낙상 감지 가속도 임계값
+const float gyroThreshold = 250; // 낙상 감지 자이로 임계값
 unsigned long lastMillis = 0;
 unsigned long fallDetectedMillis = 0;
 bool fallDetected = false;
 float previousAccX = 0, previousAccY = 0, previousAccZ = 0;
 const float alpha = 0.5; // 필터 계수
-PulseSensorPlayground pulseSensor;
-// 심박수 센서 설정
-const int PulseWire = A0;       // 심박수 센서의 아날로그 핀 번호
-const int LED13 = 13;           // 내장 LED 핀
-const int Threshold = 550;      // 심박수 임계값
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
 
+// 심박수 센서 핀 설정
+const int pulsePin = A0; 
+int pulseValue = 0;
+unsigned long lastPulseTime = 0;
+unsigned long displayHeartRateUntil = 0; // 심박수 표시 시간
+
+// OLED 디스플레이 설정
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+
 void setup() {
   u8g2.begin();
   u8g2.enableUTF8Print();
   Wire.begin();
   Wire.beginTransmission(MPU_addr);
-  Wire.write(0x6B);  // PWR_MGMT_1 register
-  Wire.write(0);     // set to zero (wakes up the MPU-6050)
+  Wire.write(0x6B);  // PWR_MGMT_1 레지스터
+  Wire.write(0);     // 0으로 설정 (MPU-6050 깨우기)
   Wire.endTransmission(true);
   Serial.begin(9600);
   pinMode(BTN_PIN, INPUT_PULLUP);
+
+  // 시작 시 OLED에 표시
   u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_unifont_t_korean1);
+  u8g2.setCursor(10, 40);
+  u8g2.print("설정 완료");
   u8g2.sendBuffer();
-  // 심박수 센서 설정
-  Serial.println("Set up ok");
+  Serial.println("Setup ok");
 }
+
 void loop() {
   Wire.beginTransmission(MPU_addr);
-  Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
+  Wire.write(0x3B);  // ACCEL_XOUT_H 레지스터부터 시작
   Wire.endTransmission(false);
-  Wire.requestFrom(MPU_addr, 14, true); // request a total of 14 registers
+  Wire.requestFrom(MPU_addr, 14, true); // 총 14개 레지스터 요청
 
-  AcX = Wire.read() << 8 | Wire.read();  // 0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)    
-  AcY = Wire.read() << 8 | Wire.read();  // 0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
-  AcZ = Wire.read() << 8 | Wire.read();  // 0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
-  Tmp = Wire.read() << 8 | Wire.read();  // 0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
-  GyX = Wire.read() << 8 | Wire.read();  // 0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
-  GyY = Wire.read() << 8 | Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
-  GyZ = Wire.read() << 8 | Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
+  // 가속도 및 자이로 데이터 읽기
+  AcX = Wire.read() << 8 | Wire.read();
+  AcY = Wire.read() << 8 | Wire.read();
+  AcZ = Wire.read() << 8 | Wire.read();
+  Tmp = Wire.read() << 8 | Wire.read();
+  GyX = Wire.read() << 8 | Wire.read();
+  GyY = Wire.read() << 8 | Wire.read();
+  GyZ = Wire.read() << 8 | Wire.read();
 
-  float accX = AcX / 16384.0;
-  float accY = AcY / 16384.0;
-  float accZ = AcZ / 16384.0;
-
-  // 이동 평균 필터 적용
-  accX = alpha * accX + (1 - alpha) * previousAccX;
-  accY = alpha * accY + (1 - alpha) * previousAccY;
-  accZ = alpha * accZ + (1 - alpha) * previousAccZ;
+  // 데이터 필터링
+  float accX = alpha * (AcX / 16384.0) + (1 - alpha) * previousAccX;
+  float accY = alpha * (AcY / 16384.0) + (1 - alpha) * previousAccY;
+  float accZ = alpha * (AcZ / 16384.0) + (1 - alpha) * previousAccZ;
   previousAccX = accX;
   previousAccY = accY;
   previousAccZ = accZ;
-  // 중력 요소 제거 (assuming device is flat initially)
-  accZ -= 1.0;
+  accZ -= 1.0; // 중력 요소 제거
 
+  // 낙상 감지
   float accelMagnitude = sqrt(accX * accX + accY * accY + accZ * accZ);
-  if (accelMagnitude > accelThreshold) {
-    if (abs(GyX) > gyroThreshold || abs(GyY) > gyroThreshold || abs(GyZ) > gyroThreshold) {
-      unsigned long currentMillis = millis();
-      if (currentMillis - lastMillis > 1000) { // 낙상 이벤트를 중복 감지하지 않기 위한 시간 간격 설정
-        Serial.println("낙상감지");
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_unifont_t_korean1);
-        u8g2.setCursor(10, 40); // choose a suitable font
-        u8g2.print("!!위험 감지!!");
-        u8g2.sendBuffer();              
-        fallDetected = true;
-        fallDetectedMillis = currentMillis;
-        lastMillis = currentMillis;
-      }
+  if (accelMagnitude > accelThreshold && (abs(GyX) > gyroThreshold || abs(GyY) > gyroThreshold || abs(GyZ) > gyroThreshold)) {
+    unsigned long currentMillis = millis();
+    if (currentMillis - lastMillis > 1000) {
+      Serial.println("낙상감지");
+      u8g2.clearBuffer();
+      u8g2.setFont(u8g2_font_unifont_t_korean1);
+      u8g2.setCursor(10, 40);
+      u8g2.print("!!위험 감지!!");
+      u8g2.sendBuffer();              
+      fallDetected = true;
+      fallDetectedMillis = currentMillis;
+      lastMillis = currentMillis;
     }
   }
-  if (fallDetected) {
-    if (digitalRead(BTN_PIN) == 1) {
-      if (millis() - fallDetectedMillis > 3000) { // 버튼이 3초 동안 눌려있을 경우
-        Serial.println("낙상감지 취소완료");
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_unifont_t_korean1);
-        u8g2.setCursor(25, 40); // choose a suitable font
-        u8g2.print("안전 확인"); 
-        u8g2.sendBuffer();   
-        delay(4000);
-        u8g2.clearBuffer();
-        u8g2.sendBuffer();  
-        fallDetected = false; // 확인 후 상태 초기화
-      }
-    } else {
-      // 버튼이 눌리지 않으면 타이머 초기화
-      fallDetectedMillis = millis();
+
+  // 심박수 센서 데이터 처리
+  int readValue = analogRead(pulsePin);
+  if (readValue > 600) {
+    unsigned long currentTime = millis();
+    if (currentTime - lastPulseTime > 200) {
+      pulseValue = 60000 / (currentTime - lastPulseTime);
+      lastPulseTime = currentTime;
+      displayHeartRateUntil = currentTime + 3000; // 3초간 심박수 표시
     }
   }
-  static boolean bpmMeasured = false; // 심박수가 이미 측정되었는지 여부를 나타내는 변수
 
-  // 버튼을 누르면 심박수 측정
-  if (digitalRead(BTN_PIN) == LOW && !bpmMeasured) {
-    int myBPM = pulseSensor.getBeatsPerMinute(); // 심박수 측정
-    boolean beatDetected = pulseSensor.sawStartOfBeat(); // 심박수 측정 이벤트 여부 확인
-
-    // 디스플레이에 심박수 출력
+  // 심박수 표시
+  if (millis() < displayHeartRateUntil) {
+    Serial.print("Heart Rate: ");
+    Serial.println(pulseValue);
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_unifont_t_korean1);
-    u8g2.setCursor(0, 40); // suitable font position
-    u8g2.print("심박수:");
-    u8g2.print(myBPM); 
+    u8g2.setCursor(0, 20);
+    u8g2.print("BPM: ");
+    u8g2.print(pulseValue);
     u8g2.sendBuffer();
-
-    bpmMeasured = true; // 심박수가 측정되었음을 표시
   }
 
-  delay(100); // 데이터 읽기 주기
+  delay(100);
 }
