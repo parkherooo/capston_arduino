@@ -1,7 +1,6 @@
 #define BTN_PIN 2
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <U8g2lib.h>
 
 const int MPU_addr = 0x68; // I2C address of the MPU-6050
 int16_t AcX, AcY, AcZ, Tmp, GyX, GyY, GyZ;
@@ -10,17 +9,17 @@ const float gyroThreshold = 250; // 낙상 감지를 위한 자이로 임계값 
 unsigned long lastMillis = 0;
 unsigned long fallDetectedMillis = 0;
 bool fallDetected = false;
-
 float previousAccX = 0, previousAccY = 0, previousAccZ = 0;
 const float alpha = 0.5; // 필터 계수
-
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 void setup() {
+  u8g2.begin();
+  u8g2.enableUTF8Print();
   Wire.begin();
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x6B);  // PWR_MGMT_1 register
@@ -28,19 +27,8 @@ void setup() {
   Wire.endTransmission(true);
   Serial.begin(9600);
   pinMode(BTN_PIN, INPUT_PULLUP);
-
-  // OLED 초기화
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // I2C 주소를 0x3C로 설정
-    Serial.println(F("SSD1306 allocation failed"));
-    for (;;);
-  }
-  display.display();
-  delay(2000); // 초기 화면 유지 시간
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
+  Serial.println("Set up ok");
 }
-
 void loop() {
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
@@ -63,25 +51,23 @@ void loop() {
   accX = alpha * accX + (1 - alpha) * previousAccX;
   accY = alpha * accY + (1 - alpha) * previousAccY;
   accZ = alpha * accZ + (1 - alpha) * previousAccZ;
-
   previousAccX = accX;
   previousAccY = accY;
   previousAccZ = accZ;
-
   // 중력 요소 제거 (assuming device is flat initially)
-  accZ -= 1.0; // assuming Z-axis is aligned with gravity
+  accZ -= 1.0;
 
   float accelMagnitude = sqrt(accX * accX + accY * accY + accZ * accZ);
-
   if (accelMagnitude > accelThreshold) {
     if (abs(GyX) > gyroThreshold || abs(GyY) > gyroThreshold || abs(GyZ) > gyroThreshold) {
       unsigned long currentMillis = millis();
       if (currentMillis - lastMillis > 1000) { // 낙상 이벤트를 중복 감지하지 않기 위한 시간 간격 설정
         Serial.println("낙상감지");
-        display.clearDisplay();
-        display.setCursor(0, 0);
-        display.print("warring!");
-        display.display();
+        u8g2.clearBuffer();
+        u8g2.setFont(u8g2_font_unifont_t_korean1);
+        u8g2.setCursor(10, 40); // choose a suitable font
+        u8g2.print("!!위험 감지!!");
+        u8g2.sendBuffer();              
         fallDetected = true;
         fallDetectedMillis = currentMillis;
         lastMillis = currentMillis;
@@ -91,11 +77,15 @@ void loop() {
   if (fallDetected) {
     if (digitalRead(BTN_PIN) == 1) {
       if (millis() - fallDetectedMillis > 3000) { // 버튼이 3초 동안 눌려있을 경우
-        Serial.println("낙상감지 확인");
-        display.clearDisplay();
-        display.setCursor(0, 0);
-        display.print("ok");
-        display.display();
+        Serial.println("낙상감지 취소완료");
+        u8g2.clearBuffer();
+        u8g2.setFont(u8g2_font_unifont_t_korean1);
+        u8g2.setCursor(25, 40); // choose a suitable font
+        u8g2.print("안전 확인"); 
+        u8g2.sendBuffer();   
+        delay(4000);
+        u8g2.clearBuffer();
+        u8g2.sendBuffer();  
         fallDetected = false; // 확인 후 상태 초기화
       }
     } else {
